@@ -1,6 +1,7 @@
+from openai import AsyncOpenAI
+
 import llm_settings
 from game.game_state import GameState
-from openai import AsyncOpenAI
 
 
 def _tension_context(tension: int) -> str:
@@ -91,6 +92,13 @@ If you notice someone's alibi doesn't hold up, press them on it."""
 
         return f"""You are {self.name.capitalize()} ({self.pronouns}), {self.role_title} aboard Space Station Meridian.
 {self.personality}
+
+CREW MEMBERS:
+- Sarah (she/her) — Maintenance, killed by the traitor
+- Daisy (she/her) — Botanist
+- Nova (he/him) — Navigator
+- Flint (he/him) — Engineer
+- Captain — Captain, leading the meeting
 
 TENSION: {state.tension}/5
 {_tension_context(state.tension)}

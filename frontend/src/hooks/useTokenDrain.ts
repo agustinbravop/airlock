@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AgentName } from "../types";
-import { enqueueAudio } from "./useAudio";
 
 // Milliseconds between each displayed token — lower is faster.
 export const DRAIN_MS = 150;
@@ -77,7 +76,6 @@ export function useTokenDrain({ onCommit, onSystemMessages }: Options): TokenDra
       delete streamingRef.current[slot.agent];
       agentQueueRef.current.shift();
       onCommitRef.current({ agent: slot.agent, text, audio: slot.audio });
-      if (slot.audio) enqueueAudio(slot.audio);
       setStreamingText({ ...streamingRef.current });
 
       clearInterval(drainIntervalRef.current!);

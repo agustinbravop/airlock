@@ -38,6 +38,7 @@ export type ServerMessage =
   | { type: "player_message"; content: string }
   | { type: "agent_stream_start"; agent: AgentName; audio?: string }
   | { type: "agent_stream_token"; agent: AgentName; token: string }
+  | { type: "agent_stream_audio"; agent: AgentName; audio: string }
   | { type: "agent_stream_end"; agent: AgentName; audio?: string }
   | { type: "typing_start"; agent: AgentName }
   | { type: "typing_stop"; agent: AgentName }

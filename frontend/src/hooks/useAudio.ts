@@ -4,21 +4,26 @@ import { useCallback, useRef, useState } from "react";
 
 const _queue: string[] = [];
 let _playing = false;
+let _currentAudio: HTMLAudioElement | null = null;
 
 function _playNext() {
   if (_playing || _queue.length === 0) return;
   const b64 = _queue.shift()!;
   _playing = true;
   const audio = new Audio(`data:audio/mp3;base64,${b64}`);
+  _currentAudio = audio;
   audio.onended = () => {
+    _currentAudio = null;
     _playing = false;
     _playNext();
   };
   audio.onerror = () => {
+    _currentAudio = null;
     _playing = false;
     _playNext();
   };
   audio.play().catch(() => {
+    _currentAudio = null;
     _playing = false;
     _playNext();
   });
@@ -27,6 +32,13 @@ function _playNext() {
 export function enqueueAudio(b64: string) {
   _queue.push(b64);
   _playNext();
+}
+
+export function stopAudio() {
+  _currentAudio?.pause();
+  _currentAudio = null;
+  _queue.length = 0;
+  _playing = false;
 }
 
 // ── Voice recorder ───────────────────────────────────────────────────────────

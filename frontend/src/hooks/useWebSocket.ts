@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ServerMessage, ClientMessage } from "../types";
 
-const WS_URL = "ws://localhost:8000/ws";
+const WS_URL = import.meta.env.DEV
+  ? "ws://localhost:8000/ws"
+  : `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
 const MAX_RECONNECT_DELAY = 8000;
 
 export function useWebSocket(onMessage: (msg: ServerMessage) => void) {

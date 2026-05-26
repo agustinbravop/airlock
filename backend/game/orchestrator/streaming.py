@@ -1,5 +1,6 @@
 import asyncio
 import random
+import re
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
@@ -16,13 +17,17 @@ _agents = {
     "flint": Flint(),
 }
 
+# Match whitespace following sentence-ending punctuation for TTS chunking.
+_SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
+
 
 @dataclass
 class AgentCallbacks:
     send_typing: Callable[[str], Awaitable[None]]
     send_stream_start: Callable[[str], Awaitable[None]]
     send_stream_token: Callable[[str, str], Awaitable[None]]
-    send_stream_end: Callable[[str, str], Awaitable[None]]  # agent, full_text (for TTS)
+    send_stream_end: Callable[[str, str], Awaitable[None]]  # agent, full_text
+    send_stream_audio: Callable[[str, str], Awaitable[None]]  # agent, sentence_text
     broadcast: Callable[[dict], Awaitable[None]]
 
 
@@ -50,15 +55,31 @@ async def stream_agent(
     await cb.send_stream_start(agent_name)
 
     tokens: list[str] = []
+    sentence_chars: list[str] = []
+
     try:
         async for token in _agents[agent_name].stream(state):
             tokens.append(token)
             await cb.send_stream_token(agent_name, token)
+
+            sentence_chars.append(token)
+            acc = "".join(sentence_chars)
+            parts = _SENTENCE_RE.split(acc)
+            if len(parts) > 1:
+                for part in parts[:-1]:
+                    sentence = part.strip()
+                    if sentence:
+                        await cb.send_stream_audio(agent_name, sentence)
+                sentence_chars = list(parts[-1])
     except Exception as e:
         print(f"[{agent_name}] stream error: {e!r}")
         if not tokens:
             await cb.send_stream_token(agent_name, "...")
             tokens = ["..."]
+
+    remaining = "".join(sentence_chars).strip()
+    if remaining:
+        await cb.send_stream_audio(agent_name, remaining)
 
     full_text = "".join(tokens).strip()
 

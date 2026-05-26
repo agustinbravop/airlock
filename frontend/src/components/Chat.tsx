@@ -7,7 +7,7 @@ import ChatInput from "./ChatInput";
 import { SystemMessage, TypingRow } from "./SystemMessages";
 import { DEFAULT_TYPING_STATE, PROMPTS_BY_TENSION } from "./chatConstants";
 import { useWebSocket } from "../hooks/useWebSocket";
-import { useAudioRecorder } from "../hooks/useAudio";
+import { enqueueAudio, stopAudio, useAudioRecorder } from "../hooks/useAudio";
 import { useTokenDrain } from "../hooks/useTokenDrain";
 
 const AUTO_EJECT_GATE_MESSAGE = "We're in crisis. Eject a suspect now.";
@@ -140,6 +140,7 @@ export default function Chat() {
 
       case "tts_state":
         setTtsEnabled(msg.enabled);
+        if (!msg.enabled) stopAudio();
         break;
 
       case "player_message":
@@ -175,6 +176,10 @@ export default function Chat() {
 
       case "agent_stream_token":
         drain.pushToken(msg.agent, msg.token);
+        break;
+
+      case "agent_stream_audio":
+        enqueueAudio(msg.audio);
         break;
 
       case "agent_stream_end":

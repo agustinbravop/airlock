@@ -1,10 +1,13 @@
 import asyncio
 import base64
 import json
+import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from openai import AsyncOpenAI
 
 load_dotenv()
@@ -13,7 +16,11 @@ load_dotenv()
 import llm_settings  # noqa: E402
 from game.alibi_generator import generate_alibis  # noqa: E402
 from game.game_state import AGENTS, MAX_TENSION, GameState  # noqa: E402
-from game.orchestrator import AgentCallbacks, handle_eject, handle_player_message  # noqa: E402
+from game.orchestrator import (  # noqa: E402
+    AgentCallbacks,
+    handle_eject,
+    handle_player_message,
+)
 from routes.voice import router as voice_router  # noqa: E402
 
 AGENT_VOICES = {
@@ -71,27 +78,34 @@ async def websocket_endpoint(websocket: WebSocket):
     async def send_stream_token(agent: str, token: str):
         await send({"type": "agent_stream_token", "agent": agent, "token": token})
 
+    async def send_stream_audio(agent: str, text: str):
+        if not tts_enabled:
+            return
+        try:
+            voice = AGENT_VOICES.get(agent, "alloy")
+            tts_response = await _openai_client.audio.speech.create(
+                model=llm_settings.TTS_MODEL,
+                voice=voice,
+                input=text,
+                response_format="mp3",
+                speed=1.2,
+            )
+            audio_b64 = base64.b64encode(tts_response.content).decode("utf-8")
+            await send(
+                {"type": "agent_stream_audio", "agent": agent, "audio": audio_b64}
+            )
+        except Exception as e:
+            print(f"TTS chunk error for {agent}: {e}")
+
     async def send_stream_end(agent: str, full_text: str):
-        audio_b64 = None
-        if tts_enabled:
-            try:
-                voice = AGENT_VOICES.get(agent, "alloy")
-                tts_response = await _openai_client.audio.speech.create(
-                    model=llm_settings.TTS_MODEL,
-                    voice=voice,
-                    input=full_text,
-                    response_format="mp3",
-                )
-                audio_b64 = base64.b64encode(tts_response.content).decode("utf-8")
-            except Exception as e:
-                print(f"TTS error for {agent}: {e}")
-        await send({"type": "agent_stream_end", "agent": agent, "audio": audio_b64})
+        await send({"type": "agent_stream_end", "agent": agent, "audio": None})
 
     callbacks = AgentCallbacks(
         send_typing=send_typing,
         send_stream_start=send_stream_start,
         send_stream_token=send_stream_token,
         send_stream_end=send_stream_end,
+        send_stream_audio=send_stream_audio,
         broadcast=send,
     )
 
@@ -161,6 +175,20 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+if os.getenv("PRODUCTION"):
+    dist = Path(__file__).parent / "dist"
+
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        target = dist / full_path
+        if target.is_file():
+            return FileResponse(str(target))
+        index = dist / "index.html"
+        if index.exists():
+            return FileResponse(str(index))
+        return {"error": "not found"}
 
 
 if __name__ == "__main__":
