@@ -23,8 +23,8 @@ The crew members respond in real-time with distinct personalities, accuse each o
 
 ## Tech Stack
 
-- **Backend:** Python / FastAPI / LangChain / WebSockets — `backend/`
-- **Frontend:** React / TypeScript / TailwindCSS — `frontend/`
+- **Backend:** Python / FastAPI / OpenAI SDK / WebSockets — `backend/`
+- **Frontend:** React / TypeScript / TailwindCSS / Bun — `frontend/`
 - **LLMs:** OpenAI (GPT-4.1-mini for agents, Whisper for STT, TTS-1 for voice)
 
 ## Setup

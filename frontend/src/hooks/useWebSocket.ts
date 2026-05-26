@@ -39,7 +39,9 @@ export function useWebSocket(onMessage: (msg: ServerMessage) => void) {
       try {
         const msg = JSON.parse(event.data) as ServerMessage;
         onMessageRef.current(msg);
-      } catch {}
+      } catch {
+        // Ignore malformed messages.
+      }
     };
   }, []);
 

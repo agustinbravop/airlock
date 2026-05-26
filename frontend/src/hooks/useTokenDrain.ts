@@ -4,9 +4,16 @@ import { AgentName } from "../types";
 import { enqueueAudio } from "./useAudio";
 
 // Milliseconds between each displayed token — lower is faster.
-export const DRAIN_MS = 40;
+export const DRAIN_MS = 150;
 // Pause between one agent finishing and the next starting.
 const INTER_AGENT_MS = 700;
+
+interface AgentSlot {
+  agent: AgentName;
+  tokens: string[];
+  done: boolean;
+  audio?: string;
+}
 
 interface CommittedMessage {
   agent: AgentName;
@@ -29,81 +36,72 @@ export interface TokenDrain {
   holdSystemMessage: (content: string) => boolean;
   isActive: () => boolean;
   hasPending: () => boolean;
+  /** True whenever the drain has any work in-flight: active agent, pending agents, or inter-agent pause timer. */
+  isDraining: () => boolean;
   stopDraining: () => void;
 }
 
 export function useTokenDrain({ onCommit, onSystemMessages }: Options): TokenDrain {
   const [streamingText, setStreamingText] = useState<Record<string, string>>({});
   const streamingRef = useRef<Record<string, string>>({});
-  const tokenQueueRef = useRef<Record<string, string[]>>({});
-  const streamDoneRef = useRef<Record<string, { audio?: string }>>({});
-  const pendingAgentsRef = useRef<
-    Array<{ agent: AgentName; tokens: string[]; done: boolean; audio?: string }>
-  >([]);
+  // Single FIFO queue — index 0 is the active agent being drained, 1+ are waiting.
+  // pushToken and endAgent do one find() lookup on this array; no secondary slots.
+  const agentQueueRef = useRef<AgentSlot[]>([]);
   const pendingSystemMessagesRef = useRef<string[]>([]);
   const drainIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const interAgentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Stable refs so drainQueues can call these without listing them as deps.
   const onCommitRef = useRef(onCommit);
   onCommitRef.current = onCommit;
   const onSystemMessagesRef = useRef(onSystemMessages);
   onSystemMessagesRef.current = onSystemMessages;
 
   const drainQueues = useCallback(() => {
-    let changed = false;
-    const toCommit: Array<{ agent: string; audio?: string }> = [];
-
-    for (const agent of Object.keys(tokenQueueRef.current)) {
-      const queue = tokenQueueRef.current[agent];
-      if (queue.length > 0) {
-        streamingRef.current[agent] = (streamingRef.current[agent] ?? "") + queue.shift()!;
-        changed = true;
-      }
-      if (queue.length === 0 && agent in streamDoneRef.current) {
-        toCommit.push({ agent, audio: streamDoneRef.current[agent].audio });
-        delete tokenQueueRef.current[agent];
-        delete streamDoneRef.current[agent];
-      }
-    }
-
-    for (const { agent, audio } of toCommit) {
-      const text = streamingRef.current[agent] ?? "";
-      delete streamingRef.current[agent];
-      onCommitRef.current({ agent: agent as AgentName, text, audio });
-      if (audio) enqueueAudio(audio);
-      changed = true;
-    }
-
-    if (changed) setStreamingText({ ...streamingRef.current });
-
-    if (Object.keys(tokenQueueRef.current).length === 0) {
-      const next = pendingAgentsRef.current.shift();
-      if (next) {
-        clearInterval(drainIntervalRef.current!);
-        drainIntervalRef.current = null;
-        interAgentTimerRef.current = setTimeout(() => {
-          interAgentTimerRef.current = null;
-          streamingRef.current[next.agent] = "";
-          tokenQueueRef.current[next.agent] = next.tokens;
-          setStreamingText({ ...streamingRef.current });
-          if (next.done) streamDoneRef.current[next.agent] = { audio: next.audio };
-          drainIntervalRef.current = setInterval(drainQueues, DRAIN_MS);
-        }, INTER_AGENT_MS);
-        return;
-      }
-
-      const pending = pendingSystemMessagesRef.current.splice(0);
-      if (pending.length > 0) onSystemMessagesRef.current(pending);
+    const slot = agentQueueRef.current[0];
+    if (!slot) {
       clearInterval(drainIntervalRef.current!);
       drainIntervalRef.current = null;
+      const pending = pendingSystemMessagesRef.current.splice(0);
+      if (pending.length > 0) onSystemMessagesRef.current(pending);
+      return;
+    }
+
+    if (slot.tokens.length > 0) {
+      streamingRef.current[slot.agent] =
+        (streamingRef.current[slot.agent] ?? "") + slot.tokens.shift()!;
+      setStreamingText({ ...streamingRef.current });
+    }
+
+    if (slot.tokens.length === 0 && slot.done) {
+      const text = streamingRef.current[slot.agent] ?? "";
+      delete streamingRef.current[slot.agent];
+      agentQueueRef.current.shift();
+      onCommitRef.current({ agent: slot.agent, text, audio: slot.audio });
+      if (slot.audio) enqueueAudio(slot.audio);
+      setStreamingText({ ...streamingRef.current });
+
+      clearInterval(drainIntervalRef.current!);
+      drainIntervalRef.current = null;
+
+      if (agentQueueRef.current.length > 0) {
+        interAgentTimerRef.current = setTimeout(() => {
+          interAgentTimerRef.current = null;
+          activateHead();
+        }, INTER_AGENT_MS);
+      } else {
+        const pending = pendingSystemMessagesRef.current.splice(0);
+        if (pending.length > 0) onSystemMessagesRef.current(pending);
+      }
     }
   }, []);
 
-  const ensureDraining = useCallback(() => {
-    if (drainIntervalRef.current) return;
+  function activateHead() {
+    const slot = agentQueueRef.current[0];
+    if (!slot) return;
+    streamingRef.current[slot.agent] = "";
+    setStreamingText({ ...streamingRef.current });
     drainIntervalRef.current = setInterval(drainQueues, DRAIN_MS);
-  }, [drainQueues]);
+  }
 
   useEffect(
     () => () => {
@@ -115,9 +113,7 @@ export function useTokenDrain({ onCommit, onSystemMessages }: Options): TokenDra
 
   function stopDraining() {
     streamingRef.current = {};
-    tokenQueueRef.current = {};
-    streamDoneRef.current = {};
-    pendingAgentsRef.current = [];
+    agentQueueRef.current = [];
     pendingSystemMessagesRef.current = [];
     setStreamingText({});
     if (drainIntervalRef.current) {
@@ -131,42 +127,30 @@ export function useTokenDrain({ onCommit, onSystemMessages }: Options): TokenDra
   }
 
   function startAgent(agent: AgentName) {
-    if (Object.keys(tokenQueueRef.current).length === 0 && pendingAgentsRef.current.length === 0) {
-      streamingRef.current = { ...streamingRef.current, [agent]: "" };
-      tokenQueueRef.current[agent] = [];
-      setStreamingText({ ...streamingRef.current });
-    } else {
-      pendingAgentsRef.current.push({ agent, tokens: [], done: false });
+    agentQueueRef.current.push({ agent, tokens: [], done: false });
+    // Activate immediately only when nothing else is running.
+    // If a drain or inter-agent timer is in progress, activateHead() will be
+    // called naturally when the current head commits.
+    if (agentQueueRef.current.length === 1 && !interAgentTimerRef.current) {
+      activateHead();
     }
   }
 
   function pushToken(agent: AgentName, token: string) {
-    if (tokenQueueRef.current[agent] !== undefined) {
-      tokenQueueRef.current[agent].push(token);
-      ensureDraining();
-    } else {
-      const slot = pendingAgentsRef.current.find((p) => p.agent === agent);
-      if (slot) slot.tokens.push(token);
-    }
+    const slot = agentQueueRef.current.find((s) => s.agent === agent && !s.done);
+    if (slot) slot.tokens.push(token);
   }
 
   function endAgent(agent: AgentName, audio?: string) {
-    if (agent in tokenQueueRef.current || agent in streamDoneRef.current) {
-      streamDoneRef.current[agent] = { audio };
-    } else {
-      const slot = pendingAgentsRef.current.find((p) => p.agent === agent);
-      if (slot) {
-        slot.done = true;
-        slot.audio = audio;
-      }
+    const slot = agentQueueRef.current.find((s) => s.agent === agent && !s.done);
+    if (slot) {
+      slot.done = true;
+      slot.audio = audio;
     }
   }
 
   function holdSystemMessage(content: string): boolean {
-    const busy =
-      Object.keys(tokenQueueRef.current).length > 0 ||
-      Object.keys(streamDoneRef.current).length > 0 ||
-      pendingAgentsRef.current.length > 0;
+    const busy = agentQueueRef.current.length > 0 || interAgentTimerRef.current !== null;
     if (busy) {
       pendingSystemMessagesRef.current.push(content);
       return true;
@@ -181,8 +165,9 @@ export function useTokenDrain({ onCommit, onSystemMessages }: Options): TokenDra
     pushToken,
     endAgent,
     holdSystemMessage,
-    isActive: () => Object.keys(tokenQueueRef.current).length > 0,
-    hasPending: () => pendingAgentsRef.current.length > 0,
+    isActive: () => drainIntervalRef.current !== null,
+    hasPending: () => agentQueueRef.current.length > 1,
+    isDraining: () => agentQueueRef.current.length > 0 || interAgentTimerRef.current !== null,
     stopDraining,
   };
 }

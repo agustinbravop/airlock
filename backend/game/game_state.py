@@ -38,9 +38,6 @@ class GameState:
     agent_message_count: int = 0
     is_responding: bool = False
 
-    # Second-chance ejection (wrong first eject lets the game continue once)
-    wrong_eject: Optional[str] = None  # name of wrongly ejected agent
-
     # Per-agent emotional state (injected into prompts)
     emotional_state: dict[str, str] = field(
         default_factory=lambda: {

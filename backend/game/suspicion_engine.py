@@ -6,18 +6,19 @@ Also manages per-agent emotional state updates (rule-based, no LLM).
 import json
 
 import llm_settings
-from langchain.schema import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+from openai import AsyncOpenAI
 
 from game.game_state import AGENTS, GameState
 
-_classifier: ChatOpenAI | None = None
+CONTRADICTION_PENALTY = 0.12
+
+_classifier: AsyncOpenAI | None = None
 
 
-def _get_classifier() -> ChatOpenAI:
+def _get_classifier() -> AsyncOpenAI:
     global _classifier
     if _classifier is None:
-        _classifier = ChatOpenAI(model=llm_settings.SUSPICION_MODEL, temperature=0)
+        _classifier = AsyncOpenAI()
     return _classifier
 
 
@@ -85,16 +86,20 @@ Return a JSON object with:
 Return ONLY the JSON object, no extra text."""
 
     try:
-        llm = _get_classifier()
-        response = await llm.ainvoke(
-            [
-                SystemMessage(
-                    content="You are a game state analyser. Return only valid JSON."
-                ),
-                HumanMessage(content=prompt),
-            ]
+        client = _get_classifier()
+        response = await client.chat.completions.create(
+            model=llm_settings.SUSPICION_MODEL,
+            temperature=0,
+            timeout=30,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a game state analyser. Return only valid JSON.",
+                },
+                {"role": "user", "content": prompt},
+            ],
         )
-        raw = _strip_code_fences(response.content)
+        raw = _strip_code_fences(response.choices[0].message.content)
         result = json.loads(raw)
         return _coerce_analysis_result(result)
     except Exception:
@@ -131,16 +136,20 @@ Each element must be an object with:
 Return ONLY the JSON array, no extra text."""
 
     try:
-        llm = _get_classifier()
-        response = await llm.ainvoke(
-            [
-                SystemMessage(
-                    content="You are a game state analyser. Return only valid JSON."
-                ),
-                HumanMessage(content=prompt),
-            ]
+        client = _get_classifier()
+        response = await client.chat.completions.create(
+            model=llm_settings.SUSPICION_MODEL,
+            temperature=0,
+            timeout=30,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a game state analyser. Return only valid JSON.",
+                },
+                {"role": "user", "content": prompt},
+            ],
         )
-        raw = _strip_code_fences(response.content)
+        raw = _strip_code_fences(response.choices[0].message.content)
         parsed = json.loads(raw)
         if not isinstance(parsed, list):
             raise ValueError("Batch classifier returned non-list")
@@ -203,7 +212,7 @@ async def process_message(state: GameState, speaker: str, content: str) -> dict:
     # Contradictions raise suspicion of the speaker significantly
     if result["has_contradiction"] and speaker in AGENTS:
         for other in [a for a in AGENTS if a != speaker]:
-            state.update_suspicion(other, speaker, 0.12)
+            state.update_suspicion(other, speaker, CONTRADICTION_PENALTY)
 
     update_emotional_states(state)
     return result
@@ -271,7 +280,7 @@ async def process_messages_batch(
         # Contradictions raise suspicion of the speaker significantly
         if result.get("has_contradiction") and spk in AGENTS:
             for other in [a for a in AGENTS if a != spk]:
-                state.update_suspicion(other, spk, 0.12)
+                state.update_suspicion(other, spk, CONTRADICTION_PENALTY)
 
     update_emotional_states(state)
     return results

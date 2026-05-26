@@ -19,15 +19,8 @@ export interface GameOverPayload {
   ejected: AgentName;
   traitor: AgentName;
   won: boolean;
-  second_chance_used: boolean;
-  suspicion_matrix: Record<AgentName, Record<string, number>>;
   clues: Array<{ speaker: string; quote: string; clue: string }>;
-}
-
-export interface WrongEjectPayload {
-  ejected: AgentName;
-  traitor: AgentName;
-  suspicion_matrix: Record<string, Record<string, number>>;
+  traitor_message?: string | null;
 }
 
 export type ServerMessage =
@@ -57,19 +50,12 @@ export type ServerMessage =
       emotional_state: Record<string, string>;
     }
   | {
-      type: "wrong_eject";
-      ejected: AgentName;
-      traitor: AgentName;
-      suspicion_matrix: Record<string, Record<string, number>>;
-    }
-  | {
       type: "game_over";
       ejected: AgentName;
       traitor: AgentName;
       won: boolean;
-      second_chance_used: boolean;
-      suspicion_matrix: Record<string, Record<string, number>>;
       clues: Array<{ speaker: string; quote: string; clue: string }>;
+      traitor_message?: string | null;
     }
   | { type: "reset" };
 

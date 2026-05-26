@@ -1,159 +1,31 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import {
-  ChatMessage,
-  AgentName,
-  GameOverPayload,
-  WrongEjectPayload,
-  TypingState,
-  ServerMessage,
-} from "../types";
+import { ChatMessage, AgentName, GameOverPayload, TypingState, ServerMessage } from "../types";
 import Message from "./Message";
-import VoiceButton from "./VoiceButton";
-import { EjectSelect, WrongEjectOverlay, GameOver } from "./EjectModal";
-import SuspicionPanel from "./SuspicionPanel";
+import { EjectSelect, GameOver } from "./EjectModal";
+import ChatHeader from "./ChatHeader";
+import ChatInput from "./ChatInput";
+import { SystemMessage, TypingRow } from "./SystemMessages";
+import { DEFAULT_TYPING_STATE, PROMPTS_BY_TENSION } from "./chatConstants";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { useAudioRecorder } from "../hooks/useAudio";
 import { useTokenDrain } from "../hooks/useTokenDrain";
-import daisyPfp from "../assets/daisy.png";
-import novaPfp from "../assets/nova.png";
-import flintPfp from "../assets/flint.png";
 
-const AGENT_PFPS: Record<AgentName, string> = { daisy: daisyPfp, nova: novaPfp, flint: flintPfp };
-const AGENT_BG: Record<AgentName, string> = {
-  daisy: "bg-emerald-700",
-  nova: "bg-blue-700",
-  flint: "bg-purple-700",
-};
+const AUTO_EJECT_GATE_MESSAGE = "We're in crisis. Eject a suspect now.";
+const MODAL_DELAY_MS = 2000;
 
-const EJECT_MIN = 1;
-
-const PROMPTS_BY_TENSION: Record<number, [string, ...string[]]> = {
-  0: [
-    "Give me your alibi again. Include a specific detail someone else could verify.",
-    "Where were you in the 10 minutes before Sarah died? One sentence.",
-  ],
-  1: ["Could someone vouch for Flint?", "Who has the most to gain from Sarah being gone?"],
-  2: [
-    "Daisy: take a deep breath and think. What is your gut telling you?",
-    "Nova: separate facts from guesses. What do we actually know?",
-  ],
-  3: [
-    "Time's running out. Call out one inconsistency you heard.",
-    "Flint, you seem to know something the rest of us don't.",
-  ],
-  4: [
-    "Final chance: name your suspect and your single strongest reason.",
-    "Last question. What single detail should I not ignore?",
-  ],
-};
-
-let msgIdCounter = 0;
-function nextId() {
-  return String(++msgIdCounter);
-}
-
-function WaitingDots() {
-  const [count, setCount] = useState(1);
-  useEffect(() => {
-    const id = setInterval(() => setCount((c) => (c % 3) + 1), 1000);
-    return () => clearInterval(id);
-  }, []);
-  return <span className="inline-block w-5 text-left tracking-tight">{".".repeat(count)}</span>;
-}
-
-function SystemMessage({ content }: { content: string }) {
-  const isWaiting = content === "Crew waiting for Captain.";
-  return (
-    <div className="text-center">
-      <span
-        className={
-          isWaiting
-            ? "text-gray-300 text-xs uppercase border border-space-border px-3 py-1"
-            : "text-accent-red text-xs uppercase border border-accent-red/30 px-3 py-1 animate-pulse"
-        }
-      >
-        {isWaiting ? (
-          <>
-            CREW WAITING FOR CAPTAIN
-            <WaitingDots />
-          </>
-        ) : (
-          `⚠ ${content}`
-        )}
-      </span>
-    </div>
-  );
-}
-
-function TypingRow({ agent }: { agent?: AgentName }) {
-  return (
-    <div className="flex gap-3 items-center">
-      {agent ? (
-        <div
-          className={`w-[108px] h-[108px] ${AGENT_BG[agent]} border border-space-border shrink-0 overflow-hidden`}
-          style={{ boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.04)" }}
-        >
-          <img
-            src={AGENT_PFPS[agent]}
-            alt={agent}
-            className="w-full h-full object-cover"
-            style={{ imageRendering: "pixelated" }}
-            draggable={false}
-          />
-        </div>
-      ) : (
-        <div className="w-[108px] h-[108px] bg-gray-800 border border-space-border shrink-0 animate-pulse" />
-      )}
-      <div className="bg-space-panel border border-space-border px-4 py-2.5 flex gap-1 items-center">
-        <span
-          className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce"
-          style={{ animationDelay: "0ms" }}
-        />
-        <span
-          className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce"
-          style={{ animationDelay: "150ms" }}
-        />
-        <span
-          className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce"
-          style={{ animationDelay: "300ms" }}
-        />
-      </div>
-    </div>
-  );
+function nextIdFrom(ref: { current: number }) {
+  ref.current += 1;
+  return String(ref.current);
 }
 
 export default function Chat() {
+  const msgIdRef = useRef(0);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
 
-  const drain = useTokenDrain({
-    onCommit: useCallback(({ agent, text }: { agent: AgentName; text: string }) => {
-      setMessages((prev) => [
-        ...prev,
-        { id: nextId(), speaker: agent, content: text, timestamp: Date.now() },
-      ]);
-    }, []),
-    onSystemMessages: useCallback((contents: string[]) => {
-      setMessages((prev) => [
-        ...prev,
-        ...contents.map((content) => ({
-          id: nextId(),
-          speaker: "system" as AgentName,
-          content,
-          timestamp: Date.now(),
-        })),
-      ]);
-    }, []),
-  });
-
   const [input, setInput] = useState("");
-  const [typing, setTyping] = useState<TypingState>({
-    daisy: false,
-    nova: false,
-    flint: false,
-  });
+  const [typing, setTyping] = useState<TypingState>(() => ({ ...DEFAULT_TYPING_STATE }));
   const [showEject, setShowEject] = useState(false);
   const [gameOver, setGameOver] = useState<GameOverPayload | null>(null);
-  const [wrongEject, setWrongEject] = useState<WrongEjectPayload | null>(null);
   const [tension, setTension] = useState(0);
   const [tensionMax, setTensionMax] = useState(5);
   const [ejectDeniedMsg, setEjectDeniedMsg] = useState<string | null>(null);
@@ -165,11 +37,79 @@ export default function Chat() {
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const [promptSeed, setPromptSeed] = useState(0);
   const [awaitingCrew, setAwaitingCrew] = useState(false);
+  const [gameOverMinimized, setGameOverMinimized] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const hasFocusedOnConnect = useRef(false);
-  const ejectUnlocked = tension >= EJECT_MIN;
+  const hasAutoOpenedEjectRef = useRef(false);
+  const pendingEjectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingGameOverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const crisis = tension >= tensionMax;
+  const ejectUnlocked = crisis;
+
+  useEffect(
+    () => () => {
+      if (pendingEjectTimerRef.current) clearTimeout(pendingEjectTimerRef.current);
+      if (pendingGameOverTimerRef.current) clearTimeout(pendingGameOverTimerRef.current);
+    },
+    [],
+  );
+
+  const maybeAutoOpenEjectModal = useCallback(
+    (contents: string[]) => {
+      if (hasAutoOpenedEjectRef.current) return;
+      if (!crisis || !!gameOver) return;
+      if (!contents.includes(AUTO_EJECT_GATE_MESSAGE)) return;
+      hasAutoOpenedEjectRef.current = true;
+
+      // Wait until the last system message is visible, then delay.
+      requestAnimationFrame(() => {
+        pendingEjectTimerRef.current = setTimeout(() => {
+          pendingEjectTimerRef.current = null;
+          setShowEject(true);
+        }, MODAL_DELAY_MS);
+      });
+    },
+    [crisis, gameOver],
+  );
+
+  const showGameOverWithDelay = useCallback((payload: GameOverPayload) => {
+    // Drain must be fully stopped already; ensure we delay the modal reveal.
+    if (pendingGameOverTimerRef.current) clearTimeout(pendingGameOverTimerRef.current);
+    pendingGameOverTimerRef.current = setTimeout(() => {
+      pendingGameOverTimerRef.current = null;
+      setGameOver(payload);
+    }, MODAL_DELAY_MS);
+  }, []);
+
+  const drain = useTokenDrain({
+    onCommit: useCallback(
+      ({ agent, text }: { agent: AgentName; text: string }) => {
+        setMessages((prev) => [
+          ...prev,
+          { id: nextIdFrom(msgIdRef), speaker: agent, content: text, timestamp: Date.now() },
+        ]);
+      },
+      [msgIdRef],
+    ),
+    onSystemMessages: useCallback(
+      (contents: string[]) => {
+        setMessages((prev) => [
+          ...prev,
+          ...contents.map((content) => ({
+            id: nextIdFrom(msgIdRef),
+            speaker: "system" as AgentName,
+            content,
+            timestamp: Date.now(),
+          })),
+        ]);
+
+        maybeAutoOpenEjectModal(contents);
+      },
+      [msgIdRef, maybeAutoOpenEjectModal],
+    ),
+  });
 
   function focusInputToEnd() {
     // Ensure focus + caret placement after React updates the controlled value.
@@ -206,7 +146,7 @@ export default function Chat() {
         setMessages((prev) => [
           ...prev,
           {
-            id: nextId(),
+            id: nextIdFrom(msgIdRef),
             speaker: "player",
             content: msg.content,
             timestamp: Date.now(),
@@ -216,10 +156,10 @@ export default function Chat() {
 
       case "typing_start":
         setAwaitingCrew(false);
-        // Suppress indicator if another agent is draining — the pending agent
-        // will appear as streaming directly when it's its turn.
-        if (!drain.isActive() && !drain.hasPending()) {
-          setTyping((t) => ({ ...t, [msg.agent]: true }));
+        // Suppress if the drain has anything in-flight (active tokens, pending agents, or inter-agent timer).
+        // Replace all flags so only one agent's indicator shows at a time.
+        if (!drain.isDraining()) {
+          setTyping({ ...DEFAULT_TYPING_STATE, [msg.agent]: true });
         }
         break;
 
@@ -229,7 +169,7 @@ export default function Chat() {
 
       case "agent_stream_start":
         setAwaitingCrew(false);
-        setTyping((t) => ({ ...t, [msg.agent]: false }));
+        setTyping({ ...DEFAULT_TYPING_STATE });
         drain.startAgent(msg.agent);
         break;
 
@@ -247,17 +187,18 @@ export default function Chat() {
         break;
 
       case "system_message":
-        if (msg.content === "Crew waiting for Captain.") setPromptSeed((n) => n + 1);
         if (!drain.holdSystemMessage(msg.content)) {
           setMessages((prev) => [
             ...prev,
             {
-              id: nextId(),
+              id: nextIdFrom(msgIdRef),
               speaker: "system" as AgentName,
               content: msg.content,
               timestamp: Date.now(),
             },
           ]);
+
+          maybeAutoOpenEjectModal([msg.content]);
         }
         break;
 
@@ -271,35 +212,66 @@ export default function Chat() {
         setEmotionalState(msg.emotional_state);
         break;
 
-      case "wrong_eject":
-        setWrongEject({
-          ejected: msg.ejected,
-          traitor: msg.traitor,
-          suspicion_matrix: msg.suspicion_matrix,
-        });
-        setSuspicionMatrix(msg.suspicion_matrix);
-        break;
-
       case "game_over":
         drain.stopDraining();
-        setTyping({ daisy: false, nova: false, flint: false });
-        setWrongEject(null);
+        setTyping({ ...DEFAULT_TYPING_STATE });
         setAwaitingCrew(false);
-        setGameOver(msg);
+        if (msg.won) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: nextIdFrom(msgIdRef),
+              speaker: "system" as const,
+              content: "TRAITOR ELIMINATED.",
+              timestamp: Date.now(),
+            },
+          ]);
+        } else {
+          if (msg.traitor_message) {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: nextIdFrom(msgIdRef),
+                speaker: msg.traitor as AgentName,
+                content: msg.traitor_message!,
+                timestamp: Date.now(),
+              },
+            ]);
+          }
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: nextIdFrom(msgIdRef),
+              speaker: "system" as const,
+              content: "CHANNEL OFFLINE. COMMS SABOTAGED.",
+              timestamp: Date.now(),
+            },
+          ]);
+        }
+        showGameOverWithDelay(msg);
         break;
 
       case "reset":
         drain.stopDraining();
+        if (pendingEjectTimerRef.current) {
+          clearTimeout(pendingEjectTimerRef.current);
+          pendingEjectTimerRef.current = null;
+        }
+        if (pendingGameOverTimerRef.current) {
+          clearTimeout(pendingGameOverTimerRef.current);
+          pendingGameOverTimerRef.current = null;
+        }
         setMessages([]);
-        setTyping({ daisy: false, nova: false, flint: false });
+        setTyping({ ...DEFAULT_TYPING_STATE });
         setGameOver(null);
-        setWrongEject(null);
         setTension(0);
         setTensionMax(5);
         setSuspicionMatrix({});
         setEmotionalState({});
         setPromptSeed(0);
         setAwaitingCrew(false);
+        setGameOverMinimized(false);
+        hasAutoOpenedEjectRef.current = false;
         break;
     }
   }, []);
@@ -333,9 +305,7 @@ export default function Chat() {
     }
   }, [connected]);
 
-  const crisis = tension >= tensionMax;
-  const crewBusy =
-    Object.values(typing).some(Boolean) || Object.keys(drain.streamingRef.current).length > 0;
+  const crewBusy = Object.values(typing).some(Boolean) || drain.isDraining();
 
   function sendMessage(content: string) {
     const trimmed = content.trim();
@@ -343,6 +313,8 @@ export default function Chat() {
     send({ type: "player_message", content: trimmed });
     setInput("");
     setAwaitingCrew(true);
+    setTension((t) => Math.min(tensionMax, t + 1));
+    setPromptSeed((n) => n + 1);
     setMessages((prev) => prev.filter((m) => m.content !== "Crew waiting for Captain."));
   }
   const promptList = PROMPTS_BY_TENSION[tension] ?? PROMPTS_BY_TENSION[0];
@@ -380,12 +352,17 @@ export default function Chat() {
   }
 
   function handleEjectClick() {
+    if (gameOver) return;
     if (!ejectUnlocked) {
       setEjectDeniedMsg("Gather more information first.");
       setTimeout(() => setEjectDeniedMsg(null), 3000);
       return;
     }
-    setShowEject(true);
+    if (pendingEjectTimerRef.current) clearTimeout(pendingEjectTimerRef.current);
+    pendingEjectTimerRef.current = setTimeout(() => {
+      pendingEjectTimerRef.current = null;
+      setShowEject(true);
+    }, MODAL_DELAY_MS);
   }
 
   function handleEject(target: AgentName) {
@@ -394,8 +371,17 @@ export default function Chat() {
   }
 
   function handleReset() {
+    if (pendingEjectTimerRef.current) {
+      clearTimeout(pendingEjectTimerRef.current);
+      pendingEjectTimerRef.current = null;
+    }
+    if (pendingGameOverTimerRef.current) {
+      clearTimeout(pendingGameOverTimerRef.current);
+      pendingGameOverTimerRef.current = null;
+    }
     send({ type: "reset" });
     setGameOver(null);
+    setGameOverMinimized(false);
     setMessages([]);
   }
 
@@ -405,116 +391,85 @@ export default function Chat() {
 
   const commsStatus = !connected
     ? "RECONNECTING"
-    : gameOver
-      ? "SESSION ENDED"
-      : crisis
-        ? "CRISIS: EJECT REQUIRED"
-        : crewBusy
-          ? "CREW RESPONDING"
-          : "CHANNEL OPEN";
+    : gameOver && !gameOver.won
+      ? "CHANNEL SABOTAGED"
+      : gameOver
+        ? "SESSION ENDED"
+        : crisis
+          ? "CRISIS"
+          : crewBusy
+            ? "CREW RESPONDING"
+            : "CHANNEL OPEN";
   const statusTone = !connected
     ? "text-gray-400"
-    : crisis
+    : gameOver
       ? "text-accent-red"
-      : crewBusy
-        ? "text-accent-amber"
-        : "text-accent-cyan";
+      : crisis
+        ? "text-accent-red"
+        : crewBusy
+          ? "text-accent-gray"
+          : "text-accent-cyan";
 
   const questionsLeft = Math.max(0, tensionMax - tension);
 
   return (
     <div className="h-dvh bg-space-black flex flex-col font-mono">
-      {/* Header */}
-      <div className="border-b border-space-border bg-space-dark px-4 py-3 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-500 uppercase shrink-0 hidden sm:inline">Crew:</span>
-          <div className="flex items-center gap-4">
-            {(["daisy", "nova", "flint"] as AgentName[]).map((agent) => (
-              <div key={agent} className="flex items-center gap-2">
-                <span
-                  className={`w-2 h-2 rounded-full ${
-                    typing[agent] || drain.streamingText[agent] !== undefined
-                      ? "bg-accent-amber animate-pulse"
-                      : "bg-emerald-500"
-                  }`}
-                />
-                <span className="text-xs text-gray-200 uppercase">{agent}</span>
-                {emotionalState[agent] && (
-                  <span className="text-xs text-gray-300 capitalize hidden sm:inline">
-                    [{emotionalState[agent]}]
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="flex items-center gap-4">
-          {/* Tension indicator */}
-          <div className="flex items-center gap-2">
-            <span
-              className={`text-xs font-bold uppercase ${crisis ? "text-accent-red" : "text-gray-300"}`}
-            >
-              TENSION:
-            </span>
-            <div className="w-16 h-1 bg-space-border rounded-full overflow-hidden">
-              <div
-                className={`h-full ${crisis ? "bg-accent-red" : tension >= 3 ? "bg-amber-500" : "bg-gray-500"} transition-all duration-700`}
-                style={{
-                  width: `${Math.min(100, Math.round(((tension + 1) / Math.max(1, tensionMax + 1)) * 100))}%`,
-                }}
-              />
-            </div>
-          </div>
-
-          <div className="hidden md:flex items-center gap-2">
-            <span className="text-xs font-mono text-gray-300">{questionsLeft}</span>
-            <span className="text-xs font-mono text-gray-300">QUESTIONS LEFT</span>
-          </div>
-
-          {/* Suspicion toggle */}
-          <button
-            onClick={() => setShowSuspicion((s) => !s)}
-            className={`text-xs uppercase px-2 py-1 border transition-colors ${
-              showSuspicion
-                ? "border-gray-400 text-gray-200"
-                : "border-gray-700 text-gray-500 hover:border-gray-500 hover:text-gray-300"
-            }`}
-            title="Suspicion matrix"
-          >
-            Matrix
-          </button>
-
-          {/* TTS toggle */}
-          <button
-            onClick={() => send({ type: "set_tts", enabled: !ttsEnabled })}
-            className={`text-xs uppercase px-2 py-1 border transition-colors ${
-              ttsEnabled
-                ? "border-emerald-600 text-emerald-400 hover:border-emerald-400"
-                : "border-gray-700 text-gray-500 hover:border-gray-500 hover:text-gray-300"
-            }`}
-            title={ttsEnabled ? "Voice on — click to mute" : "Voice off — click to enable"}
-          >
-            {ttsEnabled ? "Voice On" : "Voice Off"}
-          </button>
-
-          <button
-            onClick={handleEjectClick}
-            disabled={!!gameOver || !connected}
-            className={`px-4 py-1.5 border text-xs uppercase transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
-              ejectUnlocked
-                ? "border-accent-red text-accent-red hover:bg-accent-red hover:text-black"
-                : "border-gray-600 text-gray-500 cursor-pointer"
-            }`}
-          >
-            Eject
-          </button>
-        </div>
-      </div>
+      <ChatHeader
+        emotionalState={emotionalState}
+        tension={tension}
+        tensionMax={tensionMax}
+        crisis={crisis}
+        showSuspicion={showSuspicion}
+        onToggleSuspicion={() => setShowSuspicion((s) => !s)}
+        suspicionMatrix={suspicionMatrix}
+        ttsEnabled={ttsEnabled}
+        onToggleTts={() => send({ type: "set_tts", enabled: !ttsEnabled })}
+        gameOver={gameOver}
+        connected={connected}
+        ejectUnlocked={ejectUnlocked}
+        onEjectClick={handleEjectClick}
+      />
 
       {/* Eject denied toast */}
       {ejectDeniedMsg && (
         <div className="bg-space-panel border-b border-amber-800 px-4 py-2 text-amber-400 text-xs uppercase text-center">
           {ejectDeniedMsg}
+        </div>
+      )}
+
+      {/* Minimized game-over bar */}
+      {gameOver && gameOverMinimized && (
+        <div
+          className={`border-b px-4 py-2 flex items-center justify-between text-xs ${
+            gameOver.won
+              ? "bg-emerald-950/40 border-emerald-800/50"
+              : "bg-red-950/30 border-accent-red/30"
+          }`}
+        >
+          <button
+            type="button"
+            onClick={() => setGameOverMinimized(false)}
+            className={`font-bold uppercase animate-pulse ${
+              gameOver.won ? "text-emerald-400" : "text-accent-red"
+            }`}
+            title="View results"
+          >
+            {gameOver.won ? "✓ TRAITOR FOUND" : "✗ MISSION FAILED"}
+          </button>
+          <div className="flex items-center gap-5">
+            <button
+              onClick={() => setGameOverMinimized(false)}
+              className="text-gray-400 hover:text-gray-300 uppercase transition-colors"
+            >
+              View Results
+            </button>
+            <button
+              onClick={handleReset}
+              className="text-gray-300 hover:text-gray-200 uppercase transition-colors"
+            >
+              New Game
+            </button>
+          </div>
         </div>
       )}
 
@@ -535,7 +490,12 @@ export default function Chat() {
 
         {messages.map((msg) =>
           msg.speaker === "system" ? (
-            <SystemMessage key={msg.id} content={msg.content} />
+            <SystemMessage
+              key={msg.id}
+              content={msg.content}
+              crisis={crisis}
+              onEjectClick={handleEjectClick}
+            />
           ) : (
             <Message key={msg.id} message={msg} />
           ),
@@ -565,92 +525,31 @@ export default function Chat() {
       </div>
 
       {/* Input */}
-      <div className="border-t border-space-border bg-space-dark px-4 py-3 shrink-0">
-        <div className="max-w-4xl mx-auto space-y-2">
-          {/* Comms status + quick prompts row */}
-          <div className="flex items-center gap-3 flex-wrap">
-            <span className={`text-xs font-mono uppercase shrink-0 ${statusTone}`}>
-              {commsStatus}
-            </span>
-            <span className="text-xs text-gray-400 font-mono uppercase shrink-0 hidden sm:inline">
-              ·
-            </span>
-            <p className="text-xs text-gray-500 font-mono uppercase hidden sm:inline">
-              Quick prompts
-            </p>
-          </div>
-          <div className="flex items-center gap-3 flex-wrap">
-            {suggestedPrompts.map((p, idx) => {
-              const active = activeLine === idx;
-              return (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => {
-                    setInput(p);
-                    setActiveLine(2);
-                    focusInputToEnd();
-                  }}
-                  disabled={!connected || !!gameOver}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 border text-sm transition-all duration-150 disabled:opacity-30 disabled:cursor-not-allowed ${
-                    active
-                      ? "border-accent-cyan/50 text-gray-100 bg-accent-cyan/5"
-                      : "border-space-border/50 text-gray-400 hover:border-space-border hover:text-gray-200"
-                  }`}
-                >
-                  <span className="font-mono text-xs text-gray-600 shrink-0">{idx + 1}</span>
-                  <span>{p}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Input line */}
-          <div className="px-2 py-2 flex items-center gap-2">
-            <VoiceButton
-              recording={recording}
-              transcribing={transcribing}
-              disabled={!canAsk}
-              onMouseDown={startRecording}
-              onMouseUp={stopRecording}
-            />
-            <input
-              type="text"
-              ref={inputRef}
-              value={input}
-              onFocus={() => setActiveLine(2)}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              disabled={!connected || !!gameOver || crisis}
-              placeholder={
-                gameOver
-                  ? "Game over"
-                  : crisis
-                    ? "No more questions. Eject a suspect."
-                    : crewBusy || streamingAgents.length > 0
-                      ? "Crew responding..."
-                      : "Write your own question for the crew..."
-              }
-              className="flex-1 bg-space-black/40 border-2 border-gray-400 px-3 py-3 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-gray-300 hover:border-gray-300 disabled:opacity-40 transition-colors"
-            />
-            <button
-              onClick={() => sendMessage(input)}
-              disabled={
-                !input.trim() ||
-                !!gameOver ||
-                !connected ||
-                crewBusy ||
-                streamingAgents.length > 0 ||
-                crisis
-              }
-              className="px-6 py-3 border-2 border-accent-cyan text-accent-cyan text-sm uppercase font-mono font-bold hover:bg-accent-cyan hover:text-black transition-all opacity-80 disabled:cursor-not-allowed"
-              title="Send (Enter)"
-            >
-              Send
-            </button>
-          </div>
-        </div>
-      </div>
+      <ChatInput
+        input={input}
+        onInputChange={setInput}
+        onKeyDown={handleKeyDown}
+        onSend={() => sendMessage(input)}
+        inputRef={inputRef}
+        canAsk={canAsk}
+        connected={connected}
+        gameOver={gameOver}
+        crisis={crisis}
+        crewBusy={crewBusy}
+        streamingCount={streamingAgents.length}
+        commsStatus={commsStatus}
+        statusTone={statusTone}
+        questionsLeft={questionsLeft}
+        suggestedPrompts={suggestedPrompts}
+        onPromptClick={(p) => {
+          setInput(p);
+          focusInputToEnd();
+        }}
+        recording={recording}
+        transcribing={transcribing}
+        onStartRecording={startRecording}
+        onStopRecording={stopRecording}
+      />
 
       {/* Footer */}
       <div className="border-t border-space-border bg-space-dark px-4 py-2 shrink-0">
@@ -684,18 +583,15 @@ export default function Chat() {
       </div>
 
       {/* Overlays */}
-      {showSuspicion && (
-        <SuspicionPanel
-          matrix={suspicionMatrix}
-          emotionalState={emotionalState}
-          onClose={() => setShowSuspicion(false)}
+      {showEject && <EjectSelect onEject={handleEject} onClose={() => setShowEject(false)} />}
+      {gameOver && !gameOverMinimized && (
+        <GameOver
+          payload={gameOver}
+          onReset={handleReset}
+          onMinimize={() => setGameOverMinimized(true)}
+          onClose={() => setGameOverMinimized(true)}
         />
       )}
-      {showEject && <EjectSelect onEject={handleEject} onClose={() => setShowEject(false)} />}
-      {wrongEject && !gameOver && (
-        <WrongEjectOverlay payload={wrongEject} onContinue={() => setWrongEject(null)} />
-      )}
-      {gameOver && <GameOver payload={gameOver} onReset={handleReset} />}
     </div>
   );
 }

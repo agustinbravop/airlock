@@ -1,7 +1,6 @@
 import llm_settings
 from game.game_state import GameState
-from langchain.schema import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+from openai import AsyncOpenAI
 
 
 def _tension_context(tension: int) -> str:
@@ -114,32 +113,42 @@ RESPONSE RULES:
 
     async def respond(self, state: GameState) -> str:
         """Return full response text (non-streaming fallback)."""
-        llm = ChatOpenAI(model=llm_settings.AGENT_MODEL, temperature=0.85)
+        client = AsyncOpenAI()
         system = self._build_system_prompt(state)
         history = state.format_history(last_n=18)
-        messages = [
-            SystemMessage(content=system),
-            HumanMessage(
-                content=f"CONVERSATION SO FAR:\n{history}\n\nRespond now as {self.name.capitalize()}:"
-            ),
-        ]
-        response = await llm.ainvoke(messages)
-        return response.content.strip()
+        response = await client.chat.completions.create(
+            model=llm_settings.AGENT_MODEL,
+            temperature=0.85,
+            timeout=45,
+            messages=[
+                {"role": "system", "content": system},
+                {
+                    "role": "user",
+                    "content": f"CONVERSATION SO FAR:\n{history}\n\nRespond now as {self.name.capitalize()}:",
+                },
+            ],
+        )
+        return response.choices[0].message.content.strip()
 
     async def stream(self, state: GameState):
         """Async generator yielding response tokens one at a time."""
-        llm = ChatOpenAI(
-            model=llm_settings.AGENT_MODEL, temperature=0.85, streaming=True
-        )
+        client = AsyncOpenAI()
         system = self._build_system_prompt(state)
         history = state.format_history(last_n=18)
-        messages = [
-            SystemMessage(content=system),
-            HumanMessage(
-                content=f"CONVERSATION SO FAR:\n{history}\n\nRespond now as {self.name.capitalize()}:"
-            ),
-        ]
-        async for chunk in llm.astream(messages):
-            token = chunk.content
+        response = await client.chat.completions.create(
+            model=llm_settings.AGENT_MODEL,
+            temperature=0.85,
+            timeout=45,
+            stream=True,
+            messages=[
+                {"role": "system", "content": system},
+                {
+                    "role": "user",
+                    "content": f"CONVERSATION SO FAR:\n{history}\n\nRespond now as {self.name.capitalize()}:",
+                },
+            ],
+        )
+        async for chunk in response:
+            token = chunk.choices[0].delta.content if chunk.choices else None
             if token:
                 yield token

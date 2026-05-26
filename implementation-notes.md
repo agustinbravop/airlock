@@ -13,14 +13,15 @@
 
 ## Models Used
 
-| Purpose                               | Model                                                | Temp | Called from                                         |
-| ------------------------------------- | ---------------------------------------------------- | ---- | --------------------------------------------------- |
-| Agent responses (Daisy, Nick, Tobias) | `AIRLOCK_AGENT_MODEL` (default `gpt-4.1-mini`)       | 0.85 | `agents/base_agent.py` — `respond()` and `stream()` |
-| Suspicion / contradiction analysis    | `AIRLOCK_SUSPICION_MODEL` (default `gpt-4.1-mini`)   | 0.0  | `game/suspicion_engine.py` — `analyze_message()`    |
-| Alibi generation (game start)         | (predefined, no LLM)                                 | —    | `game/alibi_generator.py` — `generate_alibis()`     |
-| Post-game clue reveal                 | `AIRLOCK_CLUE_REVEAL_MODEL` (default `gpt-4.1-mini`) | 0.0  | `game/orchestrator.py` — `generate_clue_reveal()`   |
-| Speech-to-text (player voice)         | `AIRLOCK_STT_MODEL` (default `whisper-1`)            | —    | `routes/voice.py` — `POST /voice/transcribe`        |
-| Text-to-speech (agent voices)         | `AIRLOCK_TTS_MODEL` (default `tts-1`)                | —    | `server.py` — `_send_stream_end()`                  |
+| Purpose                              | Model                                                | Temp | Called from                                                 |
+| ------------------------------------ | ---------------------------------------------------- | ---- | ----------------------------------------------------------- |
+| Agent responses (Daisy, Nova, Flint) | `AIRLOCK_AGENT_MODEL` (default `gpt-4.1-mini`)       | 0.85 | `agents/base_agent.py` — `respond()` and `stream()`         |
+| Suspicion / contradiction analysis   | `AIRLOCK_SUSPICION_MODEL` (default `gpt-4.1-mini`)   | 0.0  | `game/suspicion_engine.py` — `analyze_message()`            |
+| Alibi generation (game start)        | (predefined, no LLM)                                 | —    | `game/alibi_generator.py` — `generate_alibis()`             |
+| Post-game clue reveal (1 clue)       | `AIRLOCK_CLUE_REVEAL_MODEL` (default `gpt-4.1-mini`) | 0.0  | `game/orchestrator/reveal.py` — `generate_clue_reveal()`    |
+| Traitor final reveal (traitor-wins)  | `AIRLOCK_CLUE_REVEAL_MODEL` (default `gpt-4.1-mini`) | 0.9  | `game/orchestrator/reveal.py` — `generate_traitor_reveal()` |
+| Speech-to-text (player voice)        | `AIRLOCK_STT_MODEL` (default `whisper-1`)            | —    | `routes/voice.py` — `POST /voice/transcribe`                |
+| Text-to-speech (agent voices)        | `AIRLOCK_TTS_MODEL` (default `tts-1`)                | —    | `server.py` — `_send_stream_end()`                          |
 
 ### Cheaper Development Defaults
 
@@ -34,11 +35,11 @@ AIRLOCK_CLUE_REVEAL_MODEL=gpt-4.1-nano
 
 ### TTS Voice Assignment
 
-| Agent  | Voice  |
-| ------ | ------ |
-| Daisy  | `nova` |
-| Nick   | `onyx` |
-| Tobias | `echo` |
+| Agent | Voice  |
+| ----- | ------ |
+| Daisy | `nova` |
+| Nova  | `onyx` |
+| Flint | `echo` |
 
 ### Temperature Rationale
 
@@ -87,7 +88,7 @@ Each agent (`daisy.py`, `nova.py`, `flint.py`) extends `BaseAgent`.
 
 Traitor is randomly assigned at game start (`GameState.__init__`) and never changes mid-game.
 
-### Orchestrator (`/backend/game/orchestrator.py`)
+### Orchestrator (`/backend/game/orchestrator/`)
 
 Called after each player message:
 
@@ -122,8 +123,8 @@ Suspicion values are injected into each agent's system prompt, giving them aware
 TTS voices per agent:
 
 - Daisy → `nova`
-- Nick → `onyx`
-- Tobias → `echo`
+- Nova → `onyx`
+- Flint → `echo`
 
 ---
 

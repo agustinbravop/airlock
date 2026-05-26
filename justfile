@@ -9,11 +9,13 @@ install:
     cd backend && uv venv && uv pip install -r requirements.txt
     cd frontend && bun install
 
-# Format code (python + frontend)
-format:
+# Lint code (backend + frontend). May modify files.
+lint:
     cd backend && source .venv/bin/activate && python -m ruff format .
     cd backend && source .venv/bin/activate && python -m ruff check .
-    cd frontend && bun run format
+    cd frontend && bunx --bun prettier --write .
+    cd frontend && bunx --bun eslint . --fix
+    cd frontend && bunx --bun tsc --noEmit
 
 # Copy root .env to backend/ then install — run this once after cloning
 setup:

@@ -94,7 +94,7 @@ export default function Intro({ onEnter }: Props) {
 
       {/* Tip */}
       <div className={`max-w-2xl w-full ${showTip ? "animate-fade-in" : "invisible"}`}>
-        <p className="mt-3 text-sm text-gray-400 font-mono">
+        <p className="mt-6 text-sm text-gray-400 font-mono">
           Tip: hold the mic to transcribe, then edit before sending.
         </p>
       </div>
